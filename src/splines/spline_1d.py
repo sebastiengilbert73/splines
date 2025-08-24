@@ -1,6 +1,7 @@
 import numpy as np
 import sys
 import abc
+import torch
 
 class Spline1d(abc.ABC):
     def __init__(self, xys, ys, x0, xn, **kwargs):
@@ -48,6 +49,24 @@ class Spline1d(abc.ABC):
                     return j
         # Should not reach this point
         raise ValueError(f"Spline1d._corresponding_j({x}): Could not find the corresponding j")
+
+    def batch_evaluate(self, x_tsr):  # x_tsr.shape = (B, 1)
+        # self.coefs.shape = (n, degree + 1)
+        degree = self.coefs.shape[1] - 1
+        # Select the cell index for each x
+        indices = torch.bucketize(x_tsr, boundaries=torch.tensor([x for x, y in self.xys]).to(x_tsr.device)) - 1  # (B, 1)
+        # Clip indices smaller than 0 and larger or equal to self.coefs.shape[0]
+        indices = torch.clamp(indices, min=0, max=self.coefs.shape[0] - 1)
+        coefs_tsr = torch.tensor(self.coefs).to(x_tsr.device)
+        batch_coefs = coefs_tsr[indices.squeeze(), :]  # (B, d + 1)
+        y_tsr = torch.zeros_like(x_tsr)  # (B, 1)
+        for p in range(degree + 1):  # 0, 1, ..., d
+            coefs_col = degree - p  # ..., 3, 2, 1, 0
+            if p == 0:
+                y_tsr[:, 0] += batch_coefs[:, coefs_col]
+            else:
+                y_tsr[:, 0] += batch_coefs[:, coefs_col] * torch.pow(x_tsr.squeeze(), p)
+        return y_tsr
 
 class LinearSpline(Spline1d):
     def __init__(self, xys, ys=None, x0=None, xn=None):
